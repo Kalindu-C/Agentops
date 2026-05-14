@@ -32,12 +32,6 @@ CREATE TABLE IF NOT EXISTS st_turns (
 
 -- Indexes for fast lookups
 CREATE INDEX IF NOT EXISTS idx_st_turns_user_session ON st_turns (user_id, session_id, created_at DESC);
--- Here idx_st_turns_user_session name of the index
--- we use user_id and session_id to create index
--- First, group everything by the user.
--- Then, within each user group, we further group by session_id.
--- Finally, we order the turns within each session by created_at in descending order.
-
 CREATE INDEX IF NOT EXISTS idx_st_turns_ttl ON st_turns (ttl_at) WHERE ttl_at IS NOT NULL;
 
 COMMENT ON TABLE st_turns IS 'Short-term conversation memory (alternative to Redis when USE_SB_ST=True)';
@@ -69,9 +63,6 @@ CREATE INDEX IF NOT EXISTS idx_mem_facts_ttl ON mem_facts(ttl_at) WHERE ttl_at I
 -- pgvector index (IVFFlat supports higher dimensions, HNSW limited to 2000)
 CREATE INDEX IF NOT EXISTS idx_mem_facts_embedding 
 ON mem_facts USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
--- This index is created for the to fast search on the embedding column
--- we group all the embdding into 100 groups (lists = 100) based on their similarity.
-
 
 -- Helper function for semantic search
 CREATE OR REPLACE FUNCTION search_mem_facts(
@@ -79,8 +70,8 @@ CREATE OR REPLACE FUNCTION search_mem_facts(
     query_user_id TEXT,
     match_threshold FLOAT DEFAULT 0.3,
     match_count INT DEFAULT 10
-) -- These are the parameters for the function, we pass the query embedding, user id, match threshold and match count
-RETURNS TABLE ( -- this function will return a table with the following columns
+)
+RETURNS TABLE (
     id UUID,
     user_id TEXT,
     text TEXT,
@@ -96,12 +87,12 @@ BEGIN
         f.text,
         f.score,
         f.tags,
-        1 - (f.embedding <=> query_embedding) AS similarity --The operator <=> measures the "distance" between the search query and the saved memory. By subtracting that distance from 1, it figures out roughly a percentage of how similar they are.
+        1 - (f.embedding <=> query_embedding) AS similarity
     FROM mem_facts f
-    WHERE f.user_id = query_user_id --Belong to this specific user.
-        AND f.deleted = FALSE --Have not been marked as deleted (deleted = FALSE).
-        AND (f.ttl_at IS NULL OR f.ttl_at > NOW()) --Have not expired yet (ttl_at IS NULL OR ttl_at > NOW()).
-        AND 1 - (f.embedding <=> query_embedding) >= match_threshold  --Meet the minimum similarity threshold.
+    WHERE f.user_id = query_user_id
+        AND f.deleted = FALSE
+        AND (f.ttl_at IS NULL OR f.ttl_at > NOW())
+        AND 1 - (f.embedding <=> query_embedding) >= match_threshold
     ORDER BY f.embedding <=> query_embedding
     LIMIT match_count;
 END;
@@ -118,7 +109,7 @@ CREATE TABLE IF NOT EXISTS mem_episodes (
     summary TEXT NOT NULL,
     summary_embedding vector(1536),
     topic_tags JSONB DEFAULT '[]'::jsonb,
-    start_at TIMESTAMPTZ NOT NULL,  -- when the episode started
+    start_at TIMESTAMPTZ NOT NULL,
     end_at TIMESTAMPTZ NOT NULL,
     turn_count INTEGER NOT NULL CHECK (turn_count > 0),
     turns JSONB NOT NULL,  -- Full conversation as JSON array
@@ -332,28 +323,21 @@ CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings(status);
 -- Enable RLS on memory tables
 ALTER TABLE mem_facts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE mem_episodes ENABLE ROW LEVEL SECURITY;
--- By default, if an app connects to a database, it can see all the rows in a table.
--- This code turns on "Row Level Security" for the memory tables. Once this is flipped on, all access is immediately blocked for everyone.
-
 
 -- Drop existing policies if they exist (for idempotent re-runs)
 DROP POLICY IF EXISTS "Users can view their own facts" ON mem_facts;
 DROP POLICY IF EXISTS "Users can manage their own facts" ON mem_facts;
 DROP POLICY IF EXISTS "Users can view their own episodes" ON mem_episodes;
 DROP POLICY IF EXISTS "Users can manage their own episodes" ON mem_episodes;
--- Before setting up new security rules, it deletes the old ones. 
 
 -- Policies: Users can only access their own memory
 CREATE POLICY "Users can view their own facts"
     ON mem_facts FOR SELECT
     USING (user_id = current_setting('app.user_id', TRUE));
--- FOR SELECT means this rule applies only when someone tries to retrieve/read data.
--- Before letting the app look at this row, check if the user_id stamped on this row matches the ID of the person currently logged into the app.
 
 CREATE POLICY "Users can manage their own facts"
     ON mem_facts FOR ALL
     USING (user_id = current_setting('app.user_id', TRUE));
--- FOR ALL, meaning reading, editing, and deleting
 
 CREATE POLICY "Users can view their own episodes"
     ON mem_episodes FOR SELECT

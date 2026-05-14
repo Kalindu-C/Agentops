@@ -14,12 +14,14 @@ Supports multiple LLM providers via OpenRouter unified API or direct providers:
 - Groq (direct)
 """
 
+from dotenv import load_dotenv
 from pathlib import Path
 from typing import Any, Dict, Optional
 import os
 import yaml
 from loguru import logger
 
+load_dotenv()
 # ========================================
 # Project Paths
 # ========================================
@@ -274,7 +276,7 @@ def load_faqs() -> list:
     Load known FAQs from config/faqs.yaml (if exists).
 
     Returns:
-        List of FAQ question strings (flattened from all categories)
+        List of FAQ items (can be strings or dictionaries)
     """
     faqs_config = _load_yaml("faqs.yaml")
     if not faqs_config:
@@ -282,10 +284,10 @@ def load_faqs() -> list:
 
     all_faqs = []
     # Flatten all categories into a single list
-    for category, questions in faqs_config.items():
-        if isinstance(questions, list):
-            all_faqs.extend(questions)
-
+    for category, items in faqs_config.items():
+        if isinstance(items, list):
+            all_faqs.extend(items)
+    
     return all_faqs
 
 

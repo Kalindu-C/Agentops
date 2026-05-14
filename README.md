@@ -1,1205 +1,189 @@
-# Context Engineering + Chat with Web (Nawaloka Hospital)
+# Agentic Memory Design
 
-> **A production-ready RAG system with advanced retrieval techniques, service-oriented architecture, and 5 chunking strategies**
+> **Multi-layer memory, multi-agent routing, RAG + CRM + web search, with Supabase, Qdrant, and LangFuse observability**
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![LangChain](https://img.shields.io/badge/LangChain-Latest-green.svg)](https://python.langchain.com/)
-[![Neural Maze Standard](https://img.shields.io/badge/Architecture-Neural%20Maze-orange.svg)](./AGENT_API_BOOTSTRAP_PROMPT.md)
+
+Hospital-assistant style project: episodic, semantic, and procedural memory; short-term context; orchestrator that routes to RAG, CRM, and Tavily-backed web search.
 
 ---
 
-## 📋 Table of Contents
+## What you'll build
 
-- [What You'll Build](#1️⃣-what-youll-build)
-- [Project Structure](#2️⃣-project-structure)
-- [Key Features](#3️⃣-key-features)
-- [Secrets Policy](#4️⃣-secrets-policy)
-- [Configuration](#5️⃣-configuration)
-- [Quick Start](#6️⃣-quick-start)
-- [Chunking Strategies (5 Methods)](#7️⃣-chunking-strategies-5-methods)
-- [Advanced RAG Techniques](#8️⃣-advanced-rag-techniques)
-- [Prompt Engineering](#9️⃣-prompt-engineering)
-- [Architecture](#🔟-architecture)
-- [Deliverables & Metrics](#1️⃣1️⃣-deliverables--metrics)
-- [Troubleshooting](#1️⃣2️⃣-troubleshooting)
-- [Documentation](#1️⃣3️⃣-documentation)
-- [Next Steps](#1️⃣4️⃣-next-steps)
+- **Short-term memory** — Recent turns (Supabase-backed ring buffer by default, or Redis via `USE_SB_ST=false`).
+- **Long-term semantic memory** — Distilled facts from conversations, stored and queried with embeddings.
+- **Episodic memory** — Conversation episodes with summaries for semantic recall.
+- **Procedural memory** — Reusable “how we do things” snippets the agent can retrieve.
+- **Agentic routing** — Orchestrator + router dispatch intents to **RAG** (Qdrant + knowledge base), **CRM** (Supabase patient/booking data), and **web search** (Tavily).
+- **Observability** — LangFuse tracing (optional, via `.env`).
+- **Ingestion** — Crawl/chunk pipeline and scripts to populate Qdrant from `data/knowledge_base/` (Markdown) and related services.
+
+This week extends in **Week 08** (see root `README.md`); **Week 09** is *LangGraph in the House* (agentic patterns as graphs).
 
 ---
 
-## 1️⃣ What You'll Build
+## Project structure
 
-A **production-grade Retrieval-Augmented Generation (RAG) system** that:
-
-✅ **Crawls** Nawaloka Hospital's website (JavaScript-rendered, depth 3, Playwright)  
-✅ **Chunks** content using **5 different strategies** (Semantic, Fixed, Sliding, Parent-Child, Late Chunking)  
-✅ **Indexes** with ChromaDB + OpenAI embeddings (`text-embedding-3-large`)  
-✅ **Retrieves** relevant context with multi-strategy mixing  
-✅ **Generates** grounded answers with inline `[URL]` citations  
-✅ **Optimizes** with Cache-Augmented Generation (CAG) and Corrective RAG (CRAG)  
-✅ **Follows** Neural Maze architecture for clean, maintainable code  
-
-**Key Differentiators:**
-- 🏗️ **Service-Oriented Architecture**: Clean separation of concerns (Domain, Application, Infrastructure)
-- 🧠 **5 Chunking Strategies**: Compare performance across semantic, fixed, sliding, parent-child, and late chunking
-- ⚡ **Advanced RAG**: CAG (caching), CRAG (confidence scoring + corrective retrieval)
-- 🎯 **Production-Ready**: Configuration management, error handling, retry logic, structured logging
-- 📚 **Educational**: Comprehensive documentation, inline comments, design rationale
+```
+Week 07/
+├── config/
+│   ├── models.yaml          # LLM / embedding model config
+│   ├── param.yaml           # Provider, chunking, RAG, paths
+│   └── faqs.yaml            # FAQ / pre-seeded content (if used)
+├── data/
+│   └── knowledge_base/      # 12 hospital-themed Markdown docs (RAG corpus)
+├── notebooks/
+│   ├── 01_agentic_routing_engine.ipynb
+│   ├── 02_memory_capture_and_distill.ipynb
+│   └── 03_memory_store_and_recall.ipynb
+├── sql/
+│   ├── supabase_schema.sql  # Core schema (memory + CRM-related tables)
+│   └── *.sql                # Seeds (specialties, locations, doctors, etc.)
+├── scripts/
+│   ├── init_supabase.py
+│   ├── ingest_to_qdrant.py
+│   ├── seed_crm_unified.py
+│   └── ...
+├── src/
+│   ├── agents/              # Router, orchestrator, tools (rag, crm, web_search)
+│   ├── memory/              # ST / LT / episodic / procedural stores + policies
+│   ├── services/            # chat_service (RAG, CAG, CRAG), ingest_service, crm_service
+│   └── infrastructure/      # config, db (Supabase, Qdrant, SQL), LLM, observability
+├── tests/                   # e.g. test_memory_core.py, test_memory_policies.py
+├── .env.example             # Copy to .env (never commit .env)
+├── pyproject.toml           # Package: agentic-memory-design
+├── requirements.txt         # Optional pip mirror of deps
+├── Makefile                 # Common dev commands
+└── README.md
+```
 
 ---
 
-## 2️⃣ Project Structure
+## Notebooks (run in order)
 
-### Neural Maze Architecture (Dev Level)
-
-```
-Context Engineering/
-├─ data/                                    # Data artifacts (gitignored except .example)
-│  ├─ nawaloka_markdown/                    # Crawled pages (Markdown)
-│  ├─ nawaloka_docs.jsonl                   # Consolidated corpus
-│  ├─ chunks_semantic.jsonl                 # Semantic chunking output
-│  ├─ chunks_fixed.jsonl                    # Fixed-window output
-│  ├─ chunks_sliding.jsonl                  # Sliding-window output
-│  ├─ chunks_parent_child.jsonl             # Parent-child output
-│  ├─ chunks_late.jsonl                     # Late chunking output
-│  ├─ vectorstore/                          # ChromaDB persistent index
-│  └─ cag_cache/                            # CAG cache storage
-│
-├─ src/
-│  └─ context_engineering/                  # Main package (Neural Maze structure)
-│     ├─ __init__.py                        # Package exports
-│     ├─ config.py                          # ⭐ Single source of truth (non-secrets)
-│     │
-│     ├─ domain/                            # Domain layer (models, utils, prompts)
-│     │  ├─ __init__.py
-│     │  ├─ models.py                       # Data models (Document, Chunk, Evidence)
-│     │  ├─ utils.py                        # Utility functions (format_docs, etc.)
-│     │  └─ prompts/
-│     │     ├─ __init__.py
-│     │     └─ rag_templates.py             # Prompt templates
-│     │
-│     ├─ application/                       # Application layer (services, use cases)
-│     │  ├─ __init__.py
-│     │  ├─ ingest_documents_service/       # Document ingestion
-│     │  │  ├─ __init__.py
-│     │  │  ├─ web_crawler.py               # Playwright crawler
-│     │  │  └─ chunkers.py                  # ⭐ All 5 chunking strategies
-│     │  ├─ chat_service/                   # Chat & RAG services
-│     │  │  ├─ __init__.py
-│     │  │  ├─ rag_service.py               # Basic RAG (LCEL)
-│     │  │  ├─ cag_cache.py                 # CAG caching
-│     │  │  ├─ cag_service.py               # CAG workflow
-│     │  │  └─ crag_service.py              # CRAG workflow
-│     │  └─ evaluation_service/             # Metrics (future)
-│     │
-│     └─ infrastructure/                    # Infrastructure layer (LLM providers)
-│        ├─ __init__.py
-│        └─ llm_providers/
-│           ├─ __init__.py
-│           ├─ openai_provider.py           # Chat LLM factory
-│           └─ embeddings.py                # Embeddings factory
-│
-├─ notebooks/                               # Executable Jupyter notebooks
-│  ├─ 01_crawl_nawaloka.ipynb               # ⭐ Web crawling (Playwright)
-│  ├─ 02_chunk_and_embed.ipynb              # ⭐ 5 chunking strategies + indexing
-│  └─ 03_chat_with_web_demo.ipynb           # ⭐ RAG + CAG + CRAG demo
-│
-├─ docs/                                    # Documentation
-│  ├─ CHUNKING_STRATEGIES.md                # Detailed chunking guide
-│  ├─ ADVANCED_RAG_TECHNIQUES.md            # CAG + CRAG explanation
-│  ├─ AGENT_API_BOOTSTRAP_PROMPT.md         # Neural Maze template guide
-│  ├─ VALIDATION_GUIDE.md                   # Testing instructions
-│  └─ CHROMADB_FIX.md                       # Troubleshooting ChromaDB
-│
-├─ .env                                     # ⚠️  Secrets (NOT committed)
-├─ .env.example                             # Template for required secrets
-├─ requirements.txt                         # Python dependencies
-├─ template.py                              # Neural Maze project generator
-├─ stepplan.md                              # Task tracker
-├─ changelog.md                             # Development log
-└─ README.md                                # ⬅️ You are here
-```
-
-### Key Files
-
-| File | Purpose | Status |
-|------|---------|--------|
-| `src/context_engineering/config.py` | Single source of truth for configuration | ✅ Production |
-| `src/context_engineering/application/ingest_documents_service/chunkers.py` | All 5 chunking strategies | ✅ Production |
-| `src/context_engineering/application/chat_service/rag_service.py` | Basic RAG with LCEL | ✅ Production |
-| `src/context_engineering/application/chat_service/cag_service.py` | Cache-Augmented Generation | ✅ Production |
-| `src/context_engineering/application/chat_service/crag_service.py` | Corrective RAG | ✅ Production |
-| `notebooks/01_crawl_nawaloka.ipynb` | Web crawling notebook | ✅ Production |
-| `notebooks/02_chunk_and_embed.ipynb` | Chunking + indexing notebook | ✅ Production |
-| `notebooks/03_chat_with_web_demo.ipynb` | RAG demo notebook | ✅ Production |
+| # | Notebook | Focus |
+|---|----------|--------|
+| 01 | `01_agentic_routing_engine.ipynb` | Multi-agent routing, tools, orchestration |
+| 02 | `02_memory_capture_and_distill.ipynb` | Capture turns, distill facts, episodic storage |
+| 03 | `03_memory_store_and_recall.ipynb` | Store / recall with token budgeting |
 
 ---
 
-## 3️⃣ Key Features
+## Prerequisites
 
-### 🕷️ Web Crawling
-- **Playwright-based** async crawling for JavaScript-rendered content
-- **Depth 3** traversal with BFS queue
-- **Polite crawling**: Respects `robots.txt`, rate limiting (1s delay)
-- **Structured output**: Markdown files + JSONL corpus
-- **Metadata tracking**: URL, title, headings, links, depth level
-
-### 📦 Chunking (5 Strategies)
-
-| Strategy | Best For | Chunk Count | Index Size |
-|----------|----------|-------------|------------|
-| **Semantic** | Topic-coherent Q&A | ~64 | Smallest |
-| **Fixed** | Predictable token budgets | ~61 | Small |
-| **Sliding** | High recall queries | ~122 | Medium |
-| **Parent-Child** | Precision + context | ~274 (200 children + 74 parents) | Large |
-| **Late Chunking** | Dynamic query-focused splitting | ~100 base | Medium |
-
-> See [CHUNKING_STRATEGIES.md](./CHUNKING_STRATEGIES.md) for detailed comparison
-
-### 🔍 Vector Search
-- **ChromaDB** persistent vector store
-- **OpenAI embeddings** (`text-embedding-3-large`, 3072 dims)
-- **Rich metadata**: URL, title, strategy, parent_id (for parent-child)
-- **Multi-strategy retrieval**: Mix chunks from different strategies
-
-### 🤖 Advanced RAG
-
-#### Basic RAG (LangChain LCEL)
-```python
-retriever → format_docs → prompt → llm → answer
-```
-
-#### Cache-Augmented Generation (CAG)
-```python
-query → cache_lookup → HIT? (return cached) : MISS? (RAG + cache)
-```
-- **15-25% latency reduction** on cache hits
-- **Disk-based caching** with TTL and size limits
-- **Pre-caching** for frequently accessed pages
-
-#### Corrective RAG (CRAG)
-```python
-query → retrieve → confidence_check → LOW? (corrective_retrieval + retry) : HIGH? (generate)
-```
-- **Confidence scoring** via LLM self-evaluation
-- **Corrective retrieval**: Expand k, switch strategies, refine query
-- **Quality improvement**: +10-20% answer relevance
-
-> See [ADVANCED_RAG_TECHNIQUES.md](./ADVANCED_RAG_TECHNIQUES.md) for implementation details
-
-### 🧠 Memory System (Agentic Memory)
-
-Complete multi-layered memory architecture for contextual conversations:
-
-| Memory Type | Storage | Retrieval | Use Case | Duration |
-|-------------|---------|-----------|----------|----------|
-| **Short-Term** | Redis (ring buffer) | Last N turns | Recent conversation context | Minutes-Hours |
-| **Long-Term Semantic** | SQLite + ChromaDB | Semantic search | Distilled facts | Days-Years |
-| **Long-Term Episodic** | SQLite + ChromaDB | Semantic search on summaries | Full conversation histories | Days-Years |
-
-#### Short-Term Memory (ST)
-```python
-# Recent conversation turns in Redis ring buffer
-st_store.append(user_id, session_id, role="user", content="...")
-recent = st_store.get_recent(user_id, k=10)  # Last 10 turns
-```
-- **Fast access** to recent context
-- **Automatic expiration** (ring buffer)
-- **Multi-session support**
-
-#### Long-Term Semantic Memory (LT)
-```python
-# Distilled facts extracted from conversations
-facts = distiller.distill(user_id, turns)
-lt_store.upsert_facts(facts)
-retrieved = lt_store.query(user_id, "medication", k=5)
-```
-- **LLM-powered fact extraction** from conversations
-- **Scoring system**: Recency + repetition + explicitness
-- **Auto-decay** and TTL management
-- **Reminder intent detection** for scheduling
-
-#### Long-Term Episodic Memory (NEW!)
-```python
-# Full conversation episodes with context preserved
-episode = create_episode_from_turns(user_id, session_id, turns, llm)
-episodic_store.store_episode(episode)
-episodes = episodic_store.query_episodes(user_id, "medication discussion", k=3)
-```
-- **Complete dialogue preservation** (not just facts)
-- **LLM-generated summaries** for semantic search
-- **Topic tagging** and time-based filtering
-- **Context-rich retrieval** for detailed history queries
-
-**Memory Workflow:**
-```
-1. User speaks → Append to ST memory
-2. ST fills up (>N turns) → Distill facts → Store in LT semantic memory
-3. Session ends → Create episode → Store in LT episodic memory
-4. Next session → Hybrid recall (ST + LT semantic + LT episodic)
-```
-
-**Notebooks:**
-- `04_agentic_memory_capture_and_distill.ipynb` - Memory capture, distillation, and episodic storage
-- `05_memory_store_and_recall.ipynb` - Hybrid memory recall with token budgeting
-- `06_reminders_demo_cli.ipynb` - Reminder scheduling and CRM integration
-
-### 🏗️ Architecture
-- **Domain-Driven Design**: Separation of concerns (Domain, Application, Infrastructure)
-- **Service Pattern**: Reusable service classes (`RAGService`, `CAGService`, `ChunkingService`)
-- **Factory Pattern**: Provider-agnostic LLM/embeddings (`get_chat_llm`, `get_default_embeddings`)
-- **Protocol-based Interfaces**: Type-safe contracts (`ChatModelLike`, `EmbeddingModelLike`)
-- **Configuration Management**: Centralized, validated config with `validate()` and `dump()`
+- Python 3.10+
+- **Supabase** project (Postgres + optional pgvector for embeddings in DB paths you enable)
+- **Qdrant** (cloud URL + API key recommended; see `.env.example`)
+- **OpenRouter** (recommended) or direct provider keys (`OPENAI_API_KEY`, etc.)
+- Optional: **Redis** if `USE_SB_ST=false` for short-term memory
+- Optional: **Tavily** for web search tool; **LangFuse** for traces
 
 ---
 
-## 4️⃣ Secrets Policy
-
-### 🔒 CRITICAL SECURITY RULE
-
-**Secrets live ONLY in `.env`**
+## Quick start
 
 ```bash
-# .env (NOT committed to git)
-OPENAI_API_KEY=sk-proj-xxx...
-```
+cd "Week 07"
 
-### Rules
-1. ✅ **DO**: Store API keys in `.env`
-2. ✅ **DO**: Use `.env.example` as template (no actual keys)
-3. ✅ **DO**: Add `.env` to `.gitignore`
-4. ❌ **DON'T**: Hardcode keys in code/notebooks
-5. ❌ **DON'T**: Read non-secret config from environment (use `config.py`)
-6. ❌ **DON'T**: Commit `.env` to version control
+# Install (uv recommended)
+uv sync
+# or: pip install -e .
 
-### Why This Matters
-- Prevents accidental key leaks in git commits
-- Enables team collaboration without sharing credentials
-- Follows industry security best practices
-- Makes CI/CD deployment secure and straightforward
-
-### Setup
-```bash
+# Environment
 cp .env.example .env
-# Edit .env and add your OpenAI API key
-```
+# Fill QDRANT_*, SUPABASE_*, OPENROUTER_API_KEY (and others as needed)
 
----
+# Initialize DB / seeds (follow scripts in sql/ and Makefile as needed)
+# e.g. apply supabase_schema.sql in Supabase SQL editor, then run seed scripts
 
-## 5️⃣ Configuration
-
-### Overview
-**All non-secret configuration lives in `src/context_engineering/config.py`**
-
-This module is the **single source of truth** for:
-- Model names (LLM, embeddings)
-- Directory paths
-- Chunking parameters
-- Retrieval settings
-- Crawling behavior
-
-### Key Configuration
-
-#### LLM & Embeddings
-```python
-OPENAI_CHAT_MODEL = "gpt-4o-mini"              # Chat completion model
-EMBEDDING_MODEL = "text-embedding-3-large"      # Embeddings (3072 dims)
-```
-
-#### Directory Paths
-```python
-DATA_DIR = Path("./data")                       # Root for all data
-CRAWL_OUT_DIR = DATA_DIR                        # Crawl outputs
-VECTOR_DIR = DATA_DIR / "vectorstore"           # ChromaDB persistence
-MARKDOWN_DIR = DATA_DIR / "nawaloka_markdown"   # Crawled pages
-CACHE_DIR = DATA_DIR / "cag_cache"              # CAG cache storage
-```
-
-#### Chunking Parameters
-
-**Semantic Chunking**
-```python
-SEMANTIC_MAX_CHUNK_SIZE = 1000                  # Max tokens per section
-SEMANTIC_MIN_CHUNK_SIZE = 200                   # Min tokens (avoid fragments)
-```
-
-**Fixed-Window Chunking**
-```python
-FIXED_CHUNK_SIZE = 800                          # Target tokens per chunk
-FIXED_CHUNK_OVERLAP = 100                       # Overlap tokens
-```
-
-**Sliding-Window Chunking**
-```python
-SLIDING_WINDOW_SIZE = 512                       # Window size in tokens
-SLIDING_STRIDE_SIZE = 256                       # Stride (50% overlap)
-```
-
-**Parent-Child Chunking**
-```python
-PARENT_CHUNK_SIZE = 1200                        # Parent chunk size
-CHILD_CHUNK_SIZE = 250                          # Child chunk size
-CHILD_OVERLAP = 50                              # Overlap between children
-```
-
-**Query-Focused Late Chunking**
-```python
-LATE_CHUNK_BASE_SIZE = 1000                     # Base passage size (indexed)
-LATE_CHUNK_SPLIT_SIZE = 300                     # Split size on retrieval
-LATE_CHUNK_CONTEXT_WINDOW = 150                # Context window around hits
-```
-
-#### Retrieval & RAG
-```python
-TOP_K_RESULTS = 5                               # Chunks to retrieve
-SIMILARITY_THRESHOLD = 0.7                      # Min cosine similarity
-CRAG_CONFIDENCE_THRESHOLD = 0.6                 # CRAG confidence cutoff
-CRAG_EXPANDED_K = 10                            # Expanded k for corrective retrieval
-```
-
-#### Crawling
-```python
-CRAWL_MAX_DEPTH = 3                             # Maximum link depth
-CRAWL_DELAY_SECONDS = 1.0                       # Polite crawl delay
-CRAWL_MAX_PAGES = 100                           # Safety limit
-```
-
-#### CAG Cache
-```python
-CAG_CACHE_TTL = 3600                            # Cache TTL (1 hour)
-CAG_CACHE_MAX_SIZE = 100                        # Max cached entries
-```
-
-### Helper Functions
-```python
-from context_engineering.config import validate, dump
-
-validate()  # Check secrets exist & create directories
-dump()      # Print all non-secret config for debugging
-```
-
----
-
-## 6️⃣ Quick Start
-
-### Prerequisites
-- Python 3.11+
-- OpenAI API key
-- ~500MB disk space for data
-
-### Installation
-
-```bash
-# 1. Clone/navigate to project
-cd "Context Engineering"
-
-# 2. Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Install Playwright browser (for web crawling)
-python -m playwright install chromium
-
-# 5. Create .env with your OpenAI API key
-cp .env.example .env
-# Edit .env and add: OPENAI_API_KEY=sk-proj-xxx...
-
-# 6. Validate configuration
-python -c "from context_engineering.config import validate, dump; validate(); dump()"
-```
-
-### Run Notebooks
-
-```bash
-# Start Jupyter
+# Jupyter
 jupyter lab
-
-# Run notebooks in order:
-# 1. notebooks/01_crawl_nawaloka.ipynb       (~5-10 min)
-# 2. notebooks/02_chunk_and_embed.ipynb      (~3-5 min)
-# 3. notebooks/03_chat_with_web_demo.ipynb   (~1-2 min)
+# Open notebooks/01_agentic_routing_engine.ipynb first
 ```
 
-### Expected Outputs
+---
 
-**After Notebook 1 (Crawl):**
-```
-data/
-├─ nawaloka_markdown/        # 20-30 .md files
-└─ nawaloka_docs.jsonl       # ~20-30 records
-```
+## Configuration
 
-**After Notebook 2 (Chunk & Index):**
-```
-data/
-├─ chunks_semantic.jsonl     # ~64 chunks
-├─ chunks_fixed.jsonl        # ~61 chunks
-├─ chunks_sliding.jsonl      # ~122 chunks
-├─ chunks_parent_child.jsonl # ~274 chunks (200 children + 74 parents)
-├─ chunks_late.jsonl         # ~100 base passages
-└─ vectorstore/              # ChromaDB index (~500+ vectors)
-   └─ chroma.sqlite3         # Persistent database
-```
+- **`config/param.yaml`** — Provider (`openrouter` / `openai`), LLM defaults, embedding tier, chunking, paths.
+- **`config/models.yaml`** — Model names per tier.
+- **`src/infrastructure/config.py`** — Loads YAML + env; single entry for app settings.
 
-**After Notebook 3 (RAG Demo):**
-```
-Console output with:
-- RAG answer with [URL] citations
-- CAG cache hit/miss statistics
-- CRAG confidence scores
-- Performance metrics (latency, token usage)
-```
+Secrets **only** in `.env` (see `.env.example`). Do not commit `.env`.
 
-### Quick Validation
+---
+
+## Key components
+
+| Area | Role |
+|------|------|
+| `src/agents/orchestrator.py` | High-level agent flow |
+| `src/agents/router.py` | Intent / route selection |
+| `src/agents/tools/` | `rag_tool`, `crm_tool`, `web_search_tool` |
+| `src/memory/` | `st_store`, `lt_store`, `episodic_store`, `procedural_store`, policies |
+| `src/services/chat_service/` | RAG, CAG, CRAG, templates |
+| `src/services/crm_service/` | CRM DB access + helpers |
+| `src/services/ingest_service/` | Crawl, chunk, ingest pipeline |
+| `src/infrastructure/db/` | Supabase, Qdrant, SQL client |
+| `src/infrastructure/observability.py` | LangFuse wiring |
+
+---
+
+## Testing
 
 ```bash
-# Test imports
-python -c "
-import sys
-sys.path.insert(0, 'src')
-from context_engineering.application.ingest_documents_service import NawalokaWebCrawler
-from context_engineering.application.chat_service import RAGService, CAGService, CRAGService
-print('✅ All imports successful!')
-"
-
-# Run test scripts (see VALIDATION_GUIDE.md)
-cd notebooks
-python test_01_crawl_nawaloka.py
-python test_02_chunk_and_embed.py
-python test_03_chat_with_web_demo.py
+# From Week 07 with venv active
+pytest tests/
 ```
 
 ---
 
-## 7️⃣ Chunking Strategies (5 Methods)
+## Dependencies
 
-### Why Multiple Strategies?
+Key packages (see `requirements.txt` or `pyproject.toml` for full list):
 
-Different strategies optimize for different retrieval goals:
-- **Semantic**: Topic coherence (best for Q&A)
-- **Fixed**: Predictable context sizes (baseline)
-- **Sliding**: High recall (entity-spanning queries)
-- **Parent-Child**: Precision + rich context (best of both worlds)
-- **Late Chunking**: Dynamic query-focused splitting (adaptive)
-
-### 1. 📚 Semantic / Heading-Aware Chunking
-
-**How It Works**: Splits on Markdown headings (`#`, `##`, `###`) using `MarkdownHeaderTextSplitter`
-
-**Pros:**
-- ✅ Preserves document structure and topic coherence
-- ✅ Natural boundaries align with human understanding
-- ✅ Great for Q&A where answers are section-scoped
-- ✅ Smallest index size (no redundancy)
-
-**Cons:**
-- ❌ Depends on markup quality (fails on plain text)
-- ❌ Variable chunk sizes (some sections huge, some tiny)
-- ❌ Misses content spanning multiple sections
-
-**Use When**: Source has good heading structure, queries align with section topics
-
-**Configuration:**
-```python
-SEMANTIC_MAX_CHUNK_SIZE = 1000
-SEMANTIC_MIN_CHUNK_SIZE = 200
 ```
-
-**Output Example:**
-```json
-{
-  "url": "https://www.nawaloka.com/our-centres/cardiology",
-  "title": "Cardiology Centre",
-  "text": "## Cardiology Services\n\nThe Cardiology Centre provides...",
-  "strategy": "semantic",
-  "i": 0
-}
+langchain>=0.1.0              # LLM orchestration
+langchain-openai              # OpenAI integration
+qdrant-client>=1.7.0          # Vector store (RAG knowledge base)
+supabase>=2.0.0               # PostgreSQL (CRM + memory stores)
+sqlalchemy>=2.0.0             # SQL ORM for Supabase
+tavily-python>=0.3.0          # Web search tool
+langfuse>=2.0.0               # Observability (optional)
+tiktoken                      # Token counting
+python-dotenv                 # Environment management
+pyyaml                        # Config loading
 ```
 
 ---
 
-### 2. 📏 Fixed-Window Chunking
+## External Services
 
-**How It Works**: Uniform 800-token chunks with 100-token overlap using `RecursiveCharacterTextSplitter` + `tiktoken`
-
-**Pros:**
-- ✅ Predictable, deterministic chunks
-- ✅ Easy to reason about context window usage
-- ✅ Works on any text (no markup required)
-- ✅ Good baseline for comparisons
-
-**Cons:**
-- ❌ Breaks semantic boundaries (sentences, paragraphs mid-chunk)
-- ❌ Overlap creates redundancy in index
-- ❌ May split entities/tables awkwardly
-
-**Use When**: Need consistency, working with plain text, or baseline comparisons
-
-**Configuration:**
-```python
-FIXED_CHUNK_SIZE = 800
-FIXED_CHUNK_OVERLAP = 100
-```
-
-**Output Example:**
-```json
-{
-  "url": "https://www.nawaloka.com/our-centres/cardiology",
-  "title": "Cardiology Centre",
-  "text": "The Cardiology Centre at Nawaloka Hospital provides comprehensive...",
-  "strategy": "fixed",
-  "i": 0
-}
-```
+| Service | Purpose | Free Tier |
+|---------|---------|-----------|
+| [Supabase](https://supabase.com) | PostgreSQL + pgvector (CRM + memory) | Yes |
+| [Qdrant Cloud](https://qdrant.tech) | Vector DB (RAG knowledge base) | Yes (1GB) |
+| [OpenRouter](https://openrouter.ai) | LLM access (recommended) | Pay-per-use |
+| [Tavily](https://tavily.com) | Real-time web search | 1000 free searches/mo |
+| [LangFuse](https://langfuse.com) | Tracing and observability | Free (hobby) |
 
 ---
 
-### 3. 🔄 Sliding-Window / Hybrid Chunking
+## Troubleshooting
 
-**How It Works**: 512-token windows with 256-token stride (50% overlap)
-
-**Pros:**
-- ✅ High recall (entities appear in multiple chunks)
-- ✅ Reduces "boundary curse" from fixed chunking
-- ✅ Balances structure (respects sections) + coverage
-
-**Cons:**
-- ❌ Index bloat (~2x chunks vs fixed)
-- ❌ Redundant content increases cost/latency
-- ❌ Requires deduplication in post-processing
-
-**Use When**: Recall > precision, entities span boundaries, or evaluation shows benefit
-
-**Configuration:**
-```python
-SLIDING_WINDOW_SIZE = 512
-SLIDING_STRIDE_SIZE = 256
-```
-
-**Output Example:**
-```json
-{
-  "url": "https://www.nawaloka.com/our-centres/cardiology",
-  "title": "Cardiology Centre",
-  "text": "Window 1: The Cardiology Centre at Nawaloka Hospital...",
-  "strategy": "sliding",
-  "i": 0
-}
-```
+| Issue | Solution |
+|-------|----------|
+| **"No module named X"** | Run `uv sync` or `pip install -e .` from `Week 07/` |
+| **Import errors in Jupyter** | Launch Jupyter from `Week 07/` root or add `sys.path` as in notebook setup cells |
+| **Supabase connection refused** | Verify `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` in `.env`; check project is active |
+| **Schema mismatch** | Apply `sql/supabase_schema.sql` in the Supabase SQL editor before running seeds |
+| **Qdrant timeout** | Check `QDRANT_URL` and `QDRANT_API_KEY`; free-tier clusters may sleep after inactivity |
+| **Embedding dimension error** | Set `embedding.tier: small` in `config/param.yaml` for pgvector compatibility |
+| **Memory store empty** | Run seed scripts first: `init_supabase.py`, `seed_crm_unified.py`, `ingest_to_qdrant.py` |
+| **LangFuse not connecting** | LangFuse is optional — set keys in `.env` or leave blank to skip tracing |
+| **Redis connection error** | Redis is optional (only if `USE_SB_ST=false`); default uses Supabase for ST memory |
 
 ---
 
-### 4. 👨‍👦 Parent-Child (Two-Tier) Chunking
-
-**How It Works**: Index small "children" (200-300 tokens) linked to larger "parents" (800-1500 tokens)
-
-**Workflow:**
-1. **Indexing**: Embed small children for precise matching
-2. **Retrieval**: Search returns relevant children
-3. **Context**: Return full parent chunk for rich context in prompt
-
-**Pros:**
-- ✅ **Best of both worlds**: Precision (small chunks) + context (large chunks)
-- ✅ Reduces "lost in the middle" problem
-- ✅ Better grounding for LLM generation
-- ✅ Maintains semantic coherence
-
-**Cons:**
-- ❌ More complex indexing (need parent-child links)
-- ❌ Larger index (both children + parents stored)
-- ❌ Retrieval overhead (fetch + expand to parent)
-
-**Use When**: Need precise retrieval but rich context for generation
-
-**Configuration:**
-```python
-PARENT_CHUNK_SIZE = 1200
-CHILD_CHUNK_SIZE = 250
-CHILD_OVERLAP = 50
-```
-
-**Output Example:**
-```json
-{
-  "url": "https://www.nawaloka.com/our-centres/cardiology",
-  "title": "Cardiology Centre",
-  "text": "Child chunk content...",
-  "strategy": "parent_child",
-  "chunk_type": "child",
-  "parent_id": "https://www.nawaloka.com/our-centres/cardiology::parent::0",
-  "i": 0
-}
-```
-
----
-
-### 5. 🎯 Query-Focused Late Chunking
-
-**How It Works**: Index larger passages (1000 tokens); on retrieval, split on-the-fly near query hits (300 tokens)
-
-**Workflow:**
-1. **Indexing**: Store large base passages (fewer vectors)
-2. **Retrieval**: Find relevant passages
-3. **Late Chunking**: Split passages around query matches at inference time
-4. **Return**: Tight 300-token quotes with 150-token context windows
-
-**Pros:**
-- ✅ Smaller index (fewer vectors to maintain)
-- ✅ Query-adaptive splitting (focused on relevant content)
-- ✅ Tighter quotes (better for citations)
-- ✅ Dynamic: same passage chunked differently per query
-
-**Cons:**
-- ❌ Inference-time overhead (split on each query)
-- ❌ More complex retrieval logic
-- ❌ Needs careful tuning (split size, context window)
-
-**Use When**: Index size matters, want query-adaptive retrieval, or citation precision critical
-
-**Configuration:**
-```python
-LATE_CHUNK_BASE_SIZE = 1000
-LATE_CHUNK_SPLIT_SIZE = 300
-LATE_CHUNK_CONTEXT_WINDOW = 150
-```
-
-**Output Example:**
-```json
-{
-  "url": "https://www.nawaloka.com/our-centres/cardiology",
-  "title": "Cardiology Centre",
-  "text": "Base passage (indexed, 1000 tokens)...",
-  "strategy": "late_chunking",
-  "i": 0
-}
-```
-
-> **For detailed comparison, code examples, and retrieval flows, see [CHUNKING_STRATEGIES.md](./CHUNKING_STRATEGIES.md)**
-
----
-
-## 8️⃣ Advanced RAG Techniques
-
-### 🔹 Basic RAG (LangChain LCEL)
-
-**Workflow:**
-```python
-query → retriever → format_docs → prompt → llm → answer
-```
-
-**Implementation:**
-```python
-from context_engineering.application.chat_service import RAGService
-
-rag_service = RAGService()
-response = rag_service.query(
-    question="Tell me about cardiology services at Nawaloka",
-    k=5
-)
-print(response.answer)  # Grounded answer with [URL] citations
-```
-
-**Features:**
-- LangChain LCEL (modern Runnable chains)
-- Multi-strategy retrieval (mix semantic, fixed, sliding)
-- Inline `[URL]` citation formatting
-- Evidence preview with truncation
-
----
-
-### ⚡ Cache-Augmented Generation (CAG)
-
-**Purpose**: Speed up repeated queries by caching answers
-
-**Workflow:**
-```
-query → cache_lookup → HIT? (return cached) : MISS? (RAG + cache)
-```
-
-**Benefits:**
-- **15-25% latency reduction** on cache hits
-- **Cost savings** (no embedding/LLM calls on hits)
-- **Better UX** for frequently asked questions
-
-**Implementation:**
-```python
-from context_engineering.application.chat_service import CAGService
-
-cag_service = CAGService()
-response = cag_service.query(
-    question="What are Nawaloka's visiting hours?",
-    k=5
-)
-
-print(f"Cache hit: {response.cached}")
-print(response.answer)
-```
-
-**Configuration:**
-```python
-CAG_CACHE_TTL = 3600           # 1 hour TTL
-CAG_CACHE_MAX_SIZE = 100       # Max 100 entries
-CACHE_DIR = "./data/cag_cache"
-```
-
-**Cache Statistics:**
-```python
-stats = cag_service.cache.get_stats()
-print(f"Hit rate: {stats['hit_rate']:.1%}")
-print(f"Total hits: {stats['hits']}")
-print(f"Total misses: {stats['misses']}")
-```
-
----
-
-### 🔍 Corrective RAG (CRAG)
-
-**Purpose**: Improve answer quality by detecting low confidence and triggering corrective retrieval
-
-**Workflow:**
-```
-query → retrieve → confidence_check → LOW? (corrective_retrieval + retry) : HIGH? (generate)
-```
-
-**Corrective Retrieval Strategies:**
-1. **Expand k**: Retrieve more chunks (e.g., k=5 → k=10)
-2. **Switch chunking strategy**: Try different strategy (semantic → sliding)
-3. **Query refinement**: Rephrase query for better matches
-4. **Optional web hop**: Fall back to live web search (future)
-
-**Benefits:**
-- **+10-20% answer relevance** (reduces hallucinations)
-- **Self-correcting** (no manual intervention)
-- **Confidence-aware** (only corrects when needed)
-
-**Implementation:**
-```python
-from context_engineering.application.chat_service import CRAGService
-
-crag_service = CRAGService()
-response = crag_service.query(
-    question="What is the success rate of cardiac procedures at Nawaloka?",
-    k=5
-)
-
-print(f"Confidence: {response.confidence:.2f}")
-print(f"Corrective retrieval triggered: {response.corrected}")
-print(response.answer)
-```
-
-**Configuration:**
-```python
-CRAG_CONFIDENCE_THRESHOLD = 0.6    # Below this → corrective retrieval
-CRAG_EXPANDED_K = 10                # Expanded k for correction
-```
-
-**Confidence Scoring:**
-Uses LLM self-evaluation to score answer confidence (0.0-1.0):
-- **0.8-1.0**: High confidence (good evidence)
-- **0.6-0.8**: Medium confidence (acceptable)
-- **0.0-0.6**: Low confidence (trigger correction)
-
-> **For detailed implementation, see [ADVANCED_RAG_TECHNIQUES.md](./ADVANCED_RAG_TECHNIQUES.md)**
-
----
-
-## 9️⃣ Prompt Engineering
-
-### KV-Cache Optimized Prompt Structure
-
-```
-[STABLE]    System Header  → Role, grounding rules, safety, citation style
-[STABLE]    Tool Schemas   → Function definitions (if using tools)
-[ROTATING]  EVIDENCE[]     → Retrieved chunks with {url, quote}
-[ROTATING]  User Query     → Current question
-[ROTATING]  Assistant      → Generated answer
-```
-
-### Template
-
-```python
-SYSTEM_HEADER = """You are a helpful assistant for Nawaloka Hospital in Sri Lanka.
-
-GROUNDING RULES:
-- Use ONLY information from EVIDENCE[] below
-- If information is missing, state the gap clearly
-- Suggest contacting the official hotline for missing info
-
-SAFETY:
-- Do NOT provide medical diagnosis
-- Encourage consulting a medical professional for health concerns
-
-STYLE:
-- Be concise and professional
-- Cite sources inline as [{url}]
-- Format: Recitation → Answer → Gaps (if any)
-"""
-
-EVIDENCE_TEMPLATE = """EVIDENCE:
-{evidence}
-
-USER QUESTION:
-{question}
-
-ASSISTANT RESPONSE:
-"""
-```
-
-### KV-Cache Optimization
-
-**Why It Matters**: LLMs cache internal representations (Key-Value tensors) of static prompt parts
-
-**Strategy:**
-1. **Keep stable parts identical** across turns (system header, tool schemas)
-2. **Only rotate dynamic parts** (evidence, user query)
-3. **Result**: 15-25% latency reduction, lower token costs
-
-**Example: Multi-turn Conversation**
-```python
-# Turn 1: Full prompt (cache miss)
-system + evidence_1 + query_1 → answer_1  # ~2.5s
-
-# Turn 2: Only new query processed (cache hit on system)
-system + evidence_2 + query_2 → answer_2  # ~1.8s (28% faster)
-
-# Turn 3: Cache hit again
-system + evidence_3 + query_3 → answer_3  # ~1.9s
-```
-
-**Anti-pattern:**
-```python
-# ❌ DON'T modify system header between turns
-system_v1 + query_1  # Cache miss
-system_v2 + query_2  # Cache miss (header changed!)
-```
-
----
-
-## 🔟 Architecture
-
-### Neural Maze Standard (Dev Level)
-
-**Philosophy**: Separation of concerns + testability + maintainability
-
-```
-context_engineering/
-├─ config.py                 # ⭐ Single source of truth
-├─ domain/                   # Core business logic (no I/O)
-│  ├─ models.py              # Data models
-│  ├─ utils.py               # Pure functions
-│  └─ prompts/               # Prompt templates
-├─ application/              # Use cases & orchestration
-│  ├─ ingest_documents_service/
-│  ├─ chat_service/
-│  └─ evaluation_service/
-└─ infrastructure/           # External systems (LLM, DB, APIs)
-   └─ llm_providers/
-```
-
-### Design Principles
-
-1. **Domain-Driven Design**: Core logic in `domain/`, I/O in `infrastructure/`
-2. **Service Pattern**: Reusable service classes with single responsibility
-3. **Factory Pattern**: Provider-agnostic factories (`get_chat_llm`, `get_default_embeddings`)
-4. **Dependency Injection**: Services receive dependencies (testable, mockable)
-5. **Protocol-based Interfaces**: Type-safe contracts (`ChatModelLike`, `EmbeddingModelLike`)
-6. **Configuration Management**: Centralized, validated, with helpers
-
-### Key Services
-
-| Service | Layer | Purpose |
-|---------|-------|---------|
-| `NawalokaWebCrawler` | Application | Web crawling with Playwright |
-| `ChunkingService` | Application | All 5 chunking strategies |
-| `RAGService` | Application | Basic RAG with LCEL |
-| `CAGService` | Application | Cache-Augmented Generation |
-| `CRAGService` | Application | Corrective RAG |
-| `get_chat_llm` | Infrastructure | Chat LLM factory (OpenAI) |
-| `get_default_embeddings` | Infrastructure | Embeddings factory (OpenAI) |
-
-### Example: Using Services
-
-```python
-# Import from application layer
-from context_engineering.application.ingest_documents_service import ChunkingService
-from context_engineering.application.chat_service import RAGService
-
-# Instantiate services
-chunking_service = ChunkingService()
-rag_service = RAGService()
-
-# Use services
-chunks = chunking_service.semantic_chunk(documents)
-response = rag_service.query("What are Nawaloka's cardiology services?")
-```
-
-> **For full architecture guide, see [AGENT_API_BOOTSTRAP_PROMPT.md](./AGENT_API_BOOTSTRAP_PROMPT.md)**
-
----
-
-## 1️⃣1️⃣ Deliverables & Metrics
-
-### Data Artifacts
-
-✅ **Crawl Outputs**
-- `data/nawaloka_markdown/*.md` — 20-30 Markdown files
-- `data/nawaloka_docs.jsonl` — ~20-30 JSON records
-
-✅ **Chunking Outputs**
-- `data/chunks_semantic.jsonl` — ~64 chunks
-- `data/chunks_fixed.jsonl` — ~61 chunks
-- `data/chunks_sliding.jsonl` — ~122 chunks
-- `data/chunks_parent_child.jsonl` — ~274 chunks (200 children + 74 parents)
-- `data/chunks_late.jsonl` — ~100 base passages
-
-✅ **Vector Index**
-- `data/vectorstore/chroma.sqlite3` — ~500+ vectors indexed
-
-✅ **Cache**
-- `data/cag_cache/` — CAG cache storage
-
-### Performance Metrics
-
-| Metric | Value | Notes |
-|--------|-------|-------|
-| **Crawl Time** | 5-10 min | 20-30 pages, depth 3 |
-| **Chunking Time** | 10-20 sec | All 5 strategies |
-| **Embedding Time** | 2-3 min | ~500 chunks @ 3072 dims |
-| **Indexing Time** | 30-60 sec | ChromaDB persistence |
-| **Retrieval Latency** | 200-500ms | k=5, cosine similarity |
-| **RAG Latency** | 1.5-2.5s | Retrieval + LLM generation |
-| **CAG Hit Latency** | 10-50ms | 95% faster than RAG |
-| **CRAG Latency** | 2.5-4s | +50-100% vs basic RAG (corrective retrieval) |
-
-### Quality Metrics
-
-| Chunking Strategy | Avg Chunk Size | Overlap | Precision | Recall | F1 |
-|-------------------|----------------|---------|-----------|--------|-----|
-| Semantic | 850 tokens | 0% | **0.85** | 0.72 | 0.78 |
-| Fixed | 800 tokens | 12.5% | 0.75 | 0.78 | 0.76 |
-| Sliding | 512 tokens | 50% | 0.70 | **0.88** | 0.78 |
-| Parent-Child | 250/1200 tokens | Variable | **0.88** | 0.82 | **0.85** |
-| Late Chunking | 300 tokens (split) | Dynamic | 0.82 | 0.85 | 0.83 |
-
-**Verdict**: Parent-Child chunking provides best balance for hospital Q&A (high precision + good recall)
-
-### Token Usage
-
-**Per Query (RAG):**
-- Embedding: ~200 tokens (query)
-- Context: ~3000 tokens (k=5 chunks)
-- Generation: ~300 tokens (answer)
-- **Total**: ~3500 tokens/query
-
-**Cost Estimate (OpenAI):**
-- Embeddings: $0.00013 per query
-- Chat: $0.0025 per query
-- **Total**: ~$0.003/query
-
-**CAG Savings:**
-- Cache hit: $0 (no API calls)
-- **ROI**: 100% cost savings on repeated queries
-
----
-
-## 1️⃣2️⃣ Troubleshooting
-
-### Common Issues
-
-#### 1. ChromaDB Corruption Error
-
-**Symptom:**
-```
-InternalError: Database error: no such table: tenants
-```
-
-**Fix:**
-```bash
-rm -rf data/vectorstore
-# Re-run notebook 02_chunk_and_embed.ipynb
-```
-
-> See [CHROMADB_FIX.md](./CHROMADB_FIX.md) for details
-
----
-
-#### 2. Crawl Produces Empty Pages
-
-**Symptom:**
-```
-Skipped (content too short: 46 chars)
-```
-
-**Cause**: JavaScript-rendered content not loading
-
-**Fix:**
-- Ensure Playwright is installed: `python -m playwright install chromium`
-- Increase timeout in `web_crawler.py`: `page.wait_for_timeout(5000)`
-- Check network connectivity
-
----
-
-#### 3. Import Errors After Restructuring
-
-**Symptom:**
-```
-ModuleNotFoundError: No module named 'context_engineering'
-```
-
-**Fix:**
-```bash
-# Restart Jupyter kernel
-# Ensure sys.path includes 'src':
-import sys
-sys.path.insert(0, 'src')
-```
-
----
-
-#### 4. API Rate Limit (429 Error)
-
-**Symptom:**
-```
-RateLimitError: You exceeded your current quota
-```
-
-**Fix:**
-- Check OpenAI API key is valid
-- Wait 60 seconds and retry
-- Reduce batch size in `config.py`: `BATCH_SIZE = 32`
-- Use tier 1+ API key for higher limits
-
----
-
-#### 5. Memory Error During Embedding
-
-**Symptom:**
-```
-MemoryError: Unable to allocate array
-```
-
-**Fix:**
-- Reduce chunk count (filter by strategy)
-- Batch embeddings in smaller groups (≤32)
-- Use smaller embedding model: `text-embedding-3-small`
-- Close other applications to free RAM
-
----
-
-### Debugging Tips
-
-```bash
-# Check configuration
-python -c "from context_engineering.config import dump; dump()"
-
-# Test imports
-python -c "
-import sys
-sys.path.insert(0, 'src')
-from context_engineering.application.ingest_documents_service import NawalokaWebCrawler
-from context_engineering.application.chat_service import RAGService
-print('✅ All imports successful!')
-"
-
-# Run validation scripts
-cd notebooks
-python test_01_crawl_nawaloka.py
-python test_02_chunk_and_embed.py
-python test_03_chat_with_web_demo.py
-```
-
----
-
-## 1️⃣3️⃣ Documentation
-
-### Core Documentation
-
-| File | Purpose |
-|------|---------|
-| [README.md](./README.md) | 👈 You are here (project overview) |
-| [CHUNKING_STRATEGIES.md](./CHUNKING_STRATEGIES.md) | Detailed chunking guide with code examples |
-| [ADVANCED_RAG_TECHNIQUES.md](./ADVANCED_RAG_TECHNIQUES.md) | CAG + CRAG implementation guide |
-| [AGENT_API_BOOTSTRAP_PROMPT.md](./AGENT_API_BOOTSTRAP_PROMPT.md) | Neural Maze architecture template |
-| [VALIDATION_GUIDE.md](./VALIDATION_GUIDE.md) | End-to-end testing instructions |
-| [CHROMADB_FIX.md](./CHROMADB_FIX.md) | Troubleshooting ChromaDB corruption |
-| [stepplan.md](./stepplan.md) | Task tracker (YAML format) |
-| [changelog.md](./changelog.md) | Development log |
-
-### External Resources
-
-- **LangChain Docs**: [https://python.langchain.com/docs/get_started/introduction](https://python.langchain.com/docs/get_started/introduction)
-- **ChromaDB**: [https://docs.trychroma.com/](https://docs.trychroma.com/)
-- **Playwright**: [https://playwright.dev/python/](https://playwright.dev/python/)
-- **OpenAI Embeddings**: [https://platform.openai.com/docs/guides/embeddings](https://platform.openai.com/docs/guides/embeddings)
-- **OpenAI Chat**: [https://platform.openai.com/docs/guides/chat](https://platform.openai.com/docs/guides/chat)
-
----
-
-## 1️⃣4️⃣ Next Steps
-
-### Immediate Improvements (Week 02+)
-
-- [ ] **Evaluation Framework**: RAGAS metrics (faithfulness, answer relevance, context precision)
-- [ ] **Hybrid Search**: BM25 (keyword) + vector (semantic) with score fusion
-- [ ] **Reranking**: Cross-encoder reranking for top-k results
-- [ ] **Multi-turn Conversations**: Conversation history management
-- [ ] **Observability**: LangSmith integration for tracing
-- [ ] **Cost Tracking**: Token usage, API costs, latency monitoring
-
-### Advanced Features (Week 03+)
-
-- [ ] **Production API**: FastAPI backend with REST endpoints
-- [ ] **Incremental Crawl**: Last-modified tracking, delta updates
-- [ ] **Multi-language**: Detect and handle non-English content
-- [ ] **PDF Extraction**: Parse medical reports, brochures
-- [ ] **Table Parsing**: Structured extraction for price lists
-- [ ] **Agent Tools**: Function calling for booking appointments
-- [ ] **Memory**: Long-term memory for personalized responses
-
-### Deployment (Week 04+)
-
-- [ ] **Docker**: Containerize application
-- [ ] **CI/CD**: GitHub Actions for testing + deployment
-- [ ] **Monitoring**: Prometheus + Grafana for metrics
-- [ ] **Authentication**: API key management, user sessions
-- [ ] **Rate Limiting**: Prevent abuse
-- [ ] **Caching**: Redis for distributed caching
-- [ ] **Load Balancing**: Handle multiple concurrent users
-
----
-
-## 📜 License
-
-MIT License (for educational purposes)
-
----
-
-## 🤝 Contributing
-
-This is an educational project. For questions:
-- See course materials
-- Refer to inline documentation
-- Check [VALIDATION_GUIDE.md](./VALIDATION_GUIDE.md) for testing
-
----
-
-## 📧 Contact
-
-For questions about this project, refer to:
-- Course instructor office hours
-- [Documentation](#1️⃣3️⃣-documentation) section above
-- Inline code comments
-
----
-
-**Last Updated**: November 2025  
-**Version**: 2.0 (Neural Maze Architecture)  
-**Python**: 3.11+  
-**LangChain**: Latest (LCEL)
-
----
-
-🎯 **Ready to build production-grade RAG systems? Start with [Quick Start](#6️⃣-quick-start)!** 🚀
+**Contact:** hi@zuucrew.ai · *Built with Zuu Crew*
