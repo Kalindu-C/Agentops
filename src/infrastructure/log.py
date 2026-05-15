@@ -102,7 +102,7 @@ def setup_logging(
     logger.remove()
 
     # Pick format
-    fmt = _FMT_NOTEBOOK if for_notebook else _FMT_FULL
+    fmt= _FMT_NOTEBOOK if for_notebook else _FMT_FULL
 
     # Primary sink: stderr (or stdout for notebooks)
     logger.add(

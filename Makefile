@@ -6,6 +6,8 @@
         mem-dev test-all \
         demo notebooks
 
+# This defines every action that make file has
+
 # ============================================================================
 # 🎯 HELP - Show all available commands
 # ============================================================================
@@ -75,14 +77,14 @@ init-supabase:
 	@echo "   ✅ Row Level Security (RLS) policies"
 	@echo ""
 	@echo "⏳ Initializing schema..."
-	@PYTHONPATH=src .venv/bin/python scripts/init_supabase.py
+	@PYTHONPATH=src .venv/Scripts/python scripts/init_supabase.py
 	@echo ""
 	@echo "✅ Supabase schema initialized successfully!"
 
 test-supabase:
 	@echo "🔍 Testing Supabase connection..."
 	@echo ""
-	@PYTHONPATH=src .venv/bin/python scripts/test_supabase.py
+	@PYTHONPATH=src .venv/Scripts/python scripts/test_supabase.py
 
 # ============================================================================
 # 🔍 QDRANT (RAG Knowledge Base)
