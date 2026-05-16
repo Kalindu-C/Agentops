@@ -28,6 +28,7 @@ from .sql_client import get_sql_engine, get_session
 # ---------------------------------------------------------------------------
 
 _supabase_client: Optional[Client] = None
+# _ mean infront of variable it only can used inside the file and do not import it 
 
 
 def get_supabase_client() -> Client:
